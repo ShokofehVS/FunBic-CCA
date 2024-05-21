@@ -15,6 +15,8 @@ import numpy as np
 import bottleneck as bn
 import random
 import math
+import funshade
+
 
 class ChengChurchAlgorithm(BaseBiclusteringAlgorithm):
     """Cheng and Church's Algorithm (CCA)
@@ -27,7 +29,7 @@ class ChengChurchAlgorithm(BaseBiclusteringAlgorithm):
 
     Parameters
     ----------
-    num_biclusters : int, default: 5
+    num_biclusters : int, default: 100
         Number of biclusters to be found.
 
     msr_threshold : float or str, default: 'estimate'
@@ -42,7 +44,7 @@ class ChengChurchAlgorithm(BaseBiclusteringAlgorithm):
         Minimum number of dataset columns required to perform multiple column deletion.
     """
 
-    def __init__(self, num_biclusters=5, msr_threshold=300, multiple_node_deletion_threshold=1.2, data_min_cols=100):
+    def __init__(self, num_biclusters, msr_threshold, multiple_node_deletion_threshold, data_min_cols):
         self.num_biclusters = num_biclusters
         self.msr_threshold = msr_threshold
         self.multiple_node_deletion_threshold = multiple_node_deletion_threshold
@@ -63,15 +65,13 @@ class ChengChurchAlgorithm(BaseBiclusteringAlgorithm):
         min_value = np.min(data)
         max_value = np.max(data)
 
-        msr_thr = 300
         biclusters = []
 
         for i in range(self.num_biclusters):
             rows = np.ones(num_rows, dtype=bool)
             cols = np.ones(num_cols, dtype=bool)
 
-            self._multiple_node_deletion(data, rows, cols, msr_thr)
-            self._single_node_deletion(data, rows, cols, msr_thr)
+            self._multiple_node_deletion(data, rows, cols, self.msr_threshold)
             self._node_addition(data, rows, cols)
 
             row_indices = np.nonzero(rows)[0]
@@ -83,54 +83,32 @@ class ChengChurchAlgorithm(BaseBiclusteringAlgorithm):
             # masking matrix values
             if i < self.num_biclusters - 1:
                 bicluster_shape = (len(row_indices), len(col_indices))
-                data[row_indices[:, np.newaxis], col_indices] = np.random.uniform(low=min_value, high=max_value, size=bicluster_shape)
+                data[row_indices[:, np.newaxis], col_indices] = np.random.uniform(low=min_value, high=max_value,
+                                                                                  size=bicluster_shape)
 
             biclusters.append(Bicluster(row_indices, col_indices))
 
         return Biclustering(biclusters)
 
-    def _single_node_deletion(self, data, rows, cols, msr_thr):
-        """Performs the single row/column deletion step (this is a direct implementation of the Algorithm 1 described in
-        the original paper)"""
-        msr, row_msr, col_msr = self._calculate_msr(data, rows, cols)
-
-        while msr > msr_thr:
-            self._single_deletion(data, rows, cols, row_msr, col_msr)
-            msr, row_msr, col_msr = self._calculate_msr(data, rows, cols)
-
-    def _single_deletion(self, data, rows, cols, row_msr, col_msr):
-        """Deletes a row or column from the bicluster being computed."""
-        row_indices = np.nonzero(rows)[0]
-        col_indices = np.nonzero(cols)[0]
-
-        row_max_msr = np.argmax(row_msr)
-        col_max_msr = np.argmax(col_msr)
-
-        if row_msr[row_max_msr] >= col_msr[col_max_msr]:
-            row2remove = row_indices[row_max_msr]
-            rows[row2remove] = False
-        else:
-            col2remove = col_indices[col_max_msr]
-            cols[col2remove] = False
-
     def _multiple_node_deletion(self, data, rows, cols, msr_thr):
-        """Performs the multiple row/column deletion step (this is a direct implementation of the Algorithm 2 described in
-        the original paper)"""
+        """Performs the multiple row/column deletion step (this is a direct implementation of the Algorithm 2 described
+        in the original paper)"""
         msr, row_msr, col_msr = self._calculate_msr(data, rows, cols)
         stop = True if msr <= msr_thr else False
 
         while not stop:
-            cols_old = np.copy(cols)
-            rows_old = np.copy(rows)
+            if len(rows) or len(cols) >= self.data_min_cols:
+                cols_old = np.copy(cols)
+                rows_old = np.copy(rows)
 
-            row_indices = np.nonzero(rows)[0]
-            rows2remove = row_indices[np.where(row_msr > self.multiple_node_deletion_threshold * msr)]
-            rows[rows2remove] = False
+                fss_rs_rows = self.fss_evaluation(row_msr - self.multiple_node_deletion_threshold * msr)
+                rows2remove = np.nonzero(fss_rs_rows)
+                rows[rows2remove] = False
 
-            if len(cols) >= self.data_min_cols:
                 msr, row_msr, col_msr = self._calculate_msr(data, rows, cols)
-                col_indices = np.nonzero(cols)[0]
-                cols2remove = col_indices[np.where(col_msr > self.multiple_node_deletion_threshold * msr)]
+
+                fss_rs_cols = self.fss_evaluation(col_msr - self.multiple_node_deletion_threshold * msr)
+                cols2remove = np.nonzero(fss_rs_cols)
                 cols[cols2remove] = False
 
             msr, row_msr, col_msr = self._calculate_msr(data, rows, cols)
@@ -152,12 +130,16 @@ class ChengChurchAlgorithm(BaseBiclusteringAlgorithm):
 
             msr, _, _ = self._calculate_msr(data, rows, cols)
             col_msr = self._calculate_msr_col_addition(data, rows, cols)
-            cols2add = np.where(col_msr <= msr)[0]
+
+            cols2add_fss = self.fss_evaluation(msr - col_msr)
+            cols2add = np.nonzero(cols2add_fss)
             cols[cols2add] = True
 
             msr, _, _ = self._calculate_msr(data, rows, cols)
-            row_msr, row_inverse_msr = self._calculate_msr_row_addition(data, rows, cols)
-            rows2add = np.where(np.logical_or(row_msr <= msr, row_inverse_msr <= msr))[0]
+            row_msr = self._calculate_msr_row_addition(data, rows, cols)
+
+            row2add_fss = self.fss_evaluation(msr - row_msr)
+            rows2add = np.nonzero(row2add_fss)
             rows[rows2add] = True
 
             if np.all(rows == rows_old) and np.all(cols == cols_old):
@@ -207,11 +189,57 @@ class ChengChurchAlgorithm(BaseBiclusteringAlgorithm):
         row_squared_residues = row_residues * row_residues
         row_msr = np.mean(row_squared_residues, axis=1)
 
-        inverse_residues = -sub_data_cols + row_means[:, np.newaxis] - col_means + data_mean
-        row_inverse_squared_residues = inverse_residues * inverse_residues
-        row_inverse_msr = np.mean(row_inverse_squared_residues, axis=1)
+        return row_msr
 
-        return row_msr, row_inverse_msr
+    def fss_evaluation(self, input):
+        """Calculate the function secrete sharing of the secret share of input and output whether to remove/ add nodes
+        from/ to matrix"""
+        # Input parameters threshold, matrix, and length of matrix
+        gamma = 0
+        z = input.astype(funshade.DTYPE)
+        K = len(z)
+
+        # Create two computing parties
+        class party:
+            def __init__(self, j: int):
+                self.j = j
+
+        P0 = party(0)
+        P1 = party(1)
+
+        # Generate setup preprocessing materials
+        r_in0, r_in1, k0, k1 = funshade.FssGenSign(K, gamma)
+
+        P0.r_in_j = r_in0
+        P1.r_in_j = r_in1
+        P0.k_j = k0
+        P1.k_j = k1
+
+        # Secrete share the input
+        rng = np.random.default_rng(seed=42)
+        z_0 = rng.integers(np.iinfo(funshade.DTYPE).min,
+                           np.iinfo(funshade.DTYPE).max, size=K, dtype=funshade.DTYPE)
+        z_1 = z - z_0
+
+        # Send the shares to the parties
+        P0.z_j = z_0
+        P1.z_j = z_1
+
+        # Mask the public input to FSS gate
+        P0.z_hat_j = P0.z_j + P0.r_in_j
+        P1.z_hat_j = P1.z_j + P1.r_in_j
+
+        P1.z_hat_nj = P0.z_hat_j
+        P0.z_hat_nj = P1.z_hat_j
+
+        # Evaluation with FSS IC gate
+        P1.o_j = funshade.eval_sign(K, P1.j, P1.k_j, P1.z_hat_j, P1.z_hat_nj)
+        P0.o_j = funshade.eval_sign(K, P0.j, P0.k_j, P0.z_hat_j, P0.z_hat_nj)
+
+        # Construct the output of both parties
+        o = P0.o_j + P1.o_j
+
+        return o
 
     def _validate_parameters(self):
         if self.num_biclusters <= 0:
@@ -227,60 +255,3 @@ class ChengChurchAlgorithm(BaseBiclusteringAlgorithm):
             raise ValueError("data_min_cols must be >= 100, got {}".format(self.data_min_cols))
 
 
-class ModifiedChengChurchAlgorithm(ChengChurchAlgorithm):
-    """Modified Cheng and Church's Algorithm (MCCA)
-
-    MCCA searches for maximal submatrices with a Mean Squared Residue value below a pre-defined threshold.
-    In the single node deletion step implemented in this class, the row/column to be dropped is randomly chosen
-    among the top alpha% of the objects or features minimizing the Mean Squared Residue of the remaining
-    matrix.
-
-    Reference
-    ----------
-    Hanczar, B., & Nadif, M. (2012). Ensemble methods for biclustering tasks. Pattern Recognition, 45(11), 3938-3949.
-
-    Parameters
-    ----------
-    num_biclusters : int, default: 10
-        Number of biclusters to be found.
-
-    msr_threshold : float, default: 0.1
-        Maximum mean squared residue accepted (delta parameter in the original paper).
-
-    multiple_node_deletion_threshold : float, default: 1.2
-        Scaling factor to remove multiple rows or columns (alpha parameter in the original paper).
-
-    data_min_cols : int, default: 100
-        Minimum number of dataset columns required to perform multiple column deletion.
-
-    alpha : float, default: 0.05
-        Percentage of the top objects or features that will be considered in the random choice of the
-        modified single node deletion step.
-    """
-
-    def __init__(self, num_biclusters=10, msr_threshold=0.1, multiple_node_deletion_threshold=1.2, data_min_cols=100, alpha=0.05):
-        super(ModifiedChengChurchAlgorithm, self).__init__(num_biclusters, msr_threshold, multiple_node_deletion_threshold, data_min_cols)
-        self.alpha = alpha
-
-    def _single_deletion(self, data, rows, cols, row_msr, col_msr):
-        """Deletes a row or column from the bicluster being computed."""
-        num_rows, num_cols = data.shape
-        choice = random.randint(0, 1)
-
-        if choice:
-            self.__random_deletion(data, rows, row_msr, choice)
-        else:
-            self.__random_deletion(data, cols, col_msr, choice)
-
-    def _validate_parameters(self):
-        super(ModifiedChengChurchAlgorithm, self)._validate_parameters()
-
-        if not (0.0 < self.alpha <= 1.0):
-            raise ValueError("alpha must be > 0.0 and <= 1.0, got {}".format(self.alpha))
-
-    def __random_deletion(self, data, bool_array, msr_array, choice):
-        indices = np.where(bool_array)[0]
-        n = int(math.ceil(len(msr_array) * self.alpha))
-        max_msr_indices = bn.argpartition(msr_array, len(msr_array) - n)[-n:]
-        i = indices[np.random.choice(max_msr_indices)]
-        bool_array[i] = False
