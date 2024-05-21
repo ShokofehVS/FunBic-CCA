@@ -1,16 +1,20 @@
+import math
+
 import numpy as np
 import cca
+import origCCA
 import pandas as pd
 from os.path import dirname, join
+import accuracy
 
-
-"""n_rows, n_cols = 20, 17
+# Numpy sample data generation
+"""n_rows, n_cols = 2884, 17
 n_elements = n_rows*n_cols
 # np.random.seed(42) # Fixed seed for reproducibility
 # data = np.random.randint(0, 1, size=(n_rows, n_cols))
-data = np.random.randint(0, 100, size=(n_rows, n_cols))"""
-# print(data)
-
+data = np.random.randint(0, 10, size=(n_rows, n_cols)) #IT CANNOT GO BEYOND THAT DUE TO HIGH NUMBER OF BITS OF INTEGER!
+print(data)
+"""
 
 def load_yeast_tavazoie():
     """Load and return the yeast dataset (Tavazoie et al., 2000) used in the original biclustering study
@@ -28,17 +32,34 @@ def load_yeast_tavazoie():
     data = np.loadtxt(join(module_dir, 'yeast_tavazoie.txt'), dtype=np.double)
     genes = np.loadtxt(join(module_dir,'genes_yeast_tavazoie.txt'), dtype=str)
     return pd.DataFrame(data, index=genes)
-    # return pd.DataFrame(data)
 
 
 data = load_yeast_tavazoie().values
-print(data)
-# missing value imputation suggested by Cheng and Church
-missing = np.where(data < 0.0)
-data[missing] = np.random.randint(low=0, high=1, size=len(missing[0]))
 
-# creating an instance of the ChengChurchAlgorithm class and running with the parameters of the original study
-cca = cca.ChengChurchAlgorithm(num_biclusters=10, msr_threshold=300,
+# missing value imputation suggested by Cheng and Church
+missing = np.where(data <= 0.0)
+data[missing] = np.random.randint(low=1, high=10, size=len(missing[0]))
+
+# Data distribution for better accuracy
+# data_transformed = (np.log(data)).astype(int) #ANOTHER DISTRIBUTION
+data_transformed = (data/10).astype(int)
+n_rows, n_cols = data_transformed.shape
+print(data_transformed, np.max(data_transformed), np.min(data_transformed))
+
+# Creating an instance of the ChengChurchAlgorithm class and running with the parameters of the original study
+cca = cca.ChengChurchAlgorithm(num_biclusters=100, msr_threshold=300,
                                multiple_node_deletion_threshold=1.2, data_min_cols=100)
-biclustering = cca.run(data)
-print(biclustering)
+biclustering = cca.run(data_transformed)
+
+
+cca_orig = origCCA.ChengChurchAlgorithm(num_biclusters=100, msr_threshold=300,
+                                multiple_node_deletion_threshold=1.2, data_min_cols=100)
+biclustering_orig = cca_orig.run(data)
+
+# Compare both version with CE
+ce = accuracy.clustering_error(biclustering, biclustering_orig, n_rows, n_cols)
+print(ce)
+
+# print(biclustering)
+# print("\n", biclustering_orig)
+
