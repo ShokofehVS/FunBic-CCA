@@ -1,8 +1,11 @@
 from itertools import product
+from scipy import sparse as sp
+from munkres import Munkres
+from math import sqrt
 
 import numpy as np
 import sys
-from munkres import Munkres
+
 
 def clustering_error(predicted_biclustering, reference_biclustering, num_rows, num_cols):
     """The Clustering Error (CE) external evaluation measure.
@@ -49,6 +52,7 @@ def clustering_error(predicted_biclustering, reference_biclustering, num_rows, n
 
     return float(dmax) / union_size
 
+
 def _calculate_size(predicted_biclustering, reference_biclustering, num_rows, num_cols, operation):
     pred_count = _count_biclusters(predicted_biclustering, num_rows, num_cols)
     true_count = _count_biclusters(reference_biclustering, num_rows, num_cols)
@@ -62,12 +66,14 @@ def _calculate_size(predicted_biclustering, reference_biclustering, num_rows, nu
 
     raise ValueError("operation must be one of {0}, got {1}".format(valid_operations, operation))
 
+
 def _calculate_dmax(predicted_biclustering, reference_biclustering):
     pred_sets = _bic2sets(predicted_biclustering)
     true_sets = _bic2sets(reference_biclustering)
     cost_matrix = [[sys.maxsize - len(b.intersection(g)) for g in true_sets] for b in pred_sets]
     indices = Munkres().compute(cost_matrix)
     return sum(sys.maxsize - cost_matrix[i][j] for i, j in indices)
+
 
 def _count_biclusters(biclustering, num_rows, num_cols):
     count = np.zeros((num_rows, num_cols), dtype=int)
@@ -77,5 +83,82 @@ def _count_biclusters(biclustering, num_rows, num_cols):
 
     return count
 
+
 def _bic2sets(biclust):
     return [set(product(b.rows, b.cols)) for b in biclust.biclusters]
+
+
+def liu_wang_match_score(predicted_biclustering, reference_biclustering):
+    """Liu & Wang match score.
+
+    Reference
+    ---------
+    Liu, X., & Wang, L. (2006). Computing the maximum similarity bi-clusters of gene expression data.
+    Bioinformatics, 23(1), 50-56.
+
+    Horta, D., & Campello, R. J. G. B. (2014). Similarity measures for comparing biclusterings.
+    IEEE/ACM Transactions on Computational Biology and Bioinformatics, 11(5), 942-954.
+
+    Parameters
+    ----------
+    predicted_biclustering : biclustlib.model.Biclustering
+        Predicted biclustering solution.
+
+    reference_biclustering : biclustlib.model.Biclustering
+        Reference biclustering solution.
+
+    Returns
+    -------
+    lw_match_score : float
+        Liu and Wang match score between 0.0 and 1.0.
+    """
+
+    k = len(predicted_biclustering.biclusters)
+
+    return sum(max((len(np.intersect1d(bp.rows, br.rows)) + len(np.intersect1d(bp.cols, br.cols))) /
+        (len(np.union1d(bp.rows, br.rows)) + len(np.union1d(bp.cols, br.cols)))
+        for br in reference_biclustering.biclusters)
+        for bp in predicted_biclustering.biclusters) / k
+
+
+def prelic_relevance(predicted_biclustering, reference_biclustering):
+    """The overall relevance match score defined in the supplementary material of Prelic et al. (2006).
+    This score reflects how well the predicted biclusters represent the reference biclusters in both dimensions
+    (rows and columns). This measure lies in the interval [0, 1], where values close to 1 indicate better
+    biclustering solutions.
+
+    Reference
+    ---------
+    Prelic, A., Bleuler, S., Zimmermann, P., Wille, A., Buhlmann, P., Gruissem, W., Hennig, L., Thiele, L. &
+    Zitzler, E. (2006). A systematic comparison and evaluation of biclustering methods for gene expression data.
+    Bioinformatics, 22(9), 1122-1129.
+
+    Horta, D., & Campello, R. J. G. B. (2014). Similarity measures for comparing biclusterings.
+    IEEE/ACM Transactions on Computational Biology and Bioinformatics, 11(5), 942-954.
+
+    Parameters
+    ----------
+    predicted_biclustering : biclustlib.model.Biclustering
+        Predicted biclustering solution.
+
+    reference_biclustering : biclustlib.model.Biclustering
+        Reference biclustering solution.
+
+    Returns
+    -------
+    prel : float
+        Similarity score between 0.0 and 1.0.
+    """
+
+    row_score = _match_score(predicted_biclustering, reference_biclustering, 'rows')
+    col_score = _match_score(predicted_biclustering, reference_biclustering, 'cols')
+
+    return sqrt(row_score * col_score)
+
+
+def _match_score(predicted_biclustering, reference_biclustering, bicluster_attr):
+    k = len(predicted_biclustering.biclusters)
+    return sum(max(len(np.intersect1d(getattr(bp, bicluster_attr), getattr(bt, bicluster_attr))) /
+        len(np.union1d(getattr(bp, bicluster_attr), getattr(bt, bicluster_attr)))
+        for bt in reference_biclustering.biclusters)
+        for bp in predicted_biclustering.biclusters) / k
