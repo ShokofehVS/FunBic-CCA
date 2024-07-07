@@ -12,12 +12,10 @@ from models import Bicluster, Biclustering
 from sklearn.utils.validation import check_array
 
 import numpy as np
-import bottleneck as bn
-import random
-import math
 import funshade
 import time
 import os
+
 
 class ChengChurchAlgorithm(BaseBiclusteringAlgorithm):
     """Cheng and Church's Algorithm (CCA)
@@ -33,10 +31,8 @@ class ChengChurchAlgorithm(BaseBiclusteringAlgorithm):
     num_biclusters : int, default: 100
         Number of biclusters to be found.
 
-    msr_threshold : float or str, default: 'estimate'
+    msr_threshold : float, default: 300 or 1200
         Maximum mean squared residue accepted (delta parameter in the original paper).
-        If 'estimate', the algorithm will calculate this threshold as:
-        (((max(data) - min(data)) ** 2) / 12) * 0.005.
 
     multiple_node_deletion_threshold : float, default: 1.2
         Scaling factor to remove multiple rows or columns (alpha parameter in the original paper).
@@ -45,12 +41,12 @@ class ChengChurchAlgorithm(BaseBiclusteringAlgorithm):
         Minimum number of dataset columns required to perform multiple column deletion.
     """
 
-    def __init__(self, num_biclusters, msr_threshold, multiple_node_deletion_threshold, data_min_cols):
+    def __init__(self, high, num_biclusters, msr_threshold, multiple_node_deletion_threshold, data_min_cols):
+        self.highest_range = high
         self.num_biclusters = num_biclusters
         self.msr_threshold = msr_threshold
         self.multiple_node_deletion_threshold = multiple_node_deletion_threshold
         self.data_min_cols = data_min_cols
-
 
     def run(self, data):
         """Compute biclustering.
@@ -61,12 +57,6 @@ class ChengChurchAlgorithm(BaseBiclusteringAlgorithm):
         """
 
         data = check_array(data, dtype=int, copy=True)
-        num_rows, num_cols = data.shape
-        min_value = np.min(data)
-        max_value = np.max(data)
-        # min_value = np.min(data)
-        # max_value = np.max(data)
-        # self._validate_parameters()
 
         # Create parties
         class party:
@@ -76,43 +66,41 @@ class ChengChurchAlgorithm(BaseBiclusteringAlgorithm):
         P_0 = party(0)
         P_1 = party(1)
 
-        # Generate secret shares of the input data
-        rng = np.random.default_rng(seed=42)
-        # in_0 = rng.integers(np.iinfo(funshade.DTYPE).min,
-        #                    np.iinfo(funshade.DTYPE).max, size=(n_rows, n_cols), dtype=funshade.DTYPE)
-
-        # in_0 = rng.integers(0, 800, size=(num_rows, num_cols))
-
-
-
+        # Definitions
         biclusters = []
         t_share, t_score, t_comp = [], [], []
 
-
+        # For number of biclusters
         for i in range(self.num_biclusters):
+            num_rows, num_cols = data.shape
+            min_value = np.min(data)
+            max_value = np.max(data)
 
-            in_0 = rng.integers(np.iinfo(funshade.DTYPE).min,
-                                np.iinfo(funshade.DTYPE).max, size=(num_rows, num_cols), dtype=funshade.DTYPE)
+            # Generate secret shares of the input data
+            rng = np.random.default_rng(seed=42)
+            in_0 = rng.integers(0, self.highest_range, size=(num_rows, num_cols), dtype="int64")
             in_1 = data - in_0
 
+            # Shape of inputs for both parties
             num_row_0, num_col_0 = in_0.shape
             num_row_1, num_col_1 = in_1.shape
 
+            # Assign secret shares to parties
             P_0.in_d = in_0
             P_1.in_d = in_1
 
+            # input matrices before score findidng and removal/ addition
             rows_0 = np.ones(num_row_0, dtype=bool)
             cols_0 = np.ones(num_col_0, dtype=bool)
 
             rows_1 = np.ones(num_row_1, dtype=bool)
             cols_1 = np.ones(num_col_1, dtype=bool)
 
+            # Steps including multiple deletion/ addition
             self._multiple_node_deletion(in_0, in_1, rows_0, cols_0, rows_1, cols_1, self.msr_threshold)
-            # self._node_addition(data, rows, cols)
+            self._node_addition(in_0, in_1, rows_0, cols_0, rows_1, cols_1)
 
-            # row_0_indices = np.nonzero(rows_0)[0]
-            # col_0_indices = np.nonzero(cols_0)[0]
-
+            # Output shares to reconstruct the final matrix
             rows = rows_0
             cols = cols_0
 
@@ -129,7 +117,6 @@ class ChengChurchAlgorithm(BaseBiclusteringAlgorithm):
                                                                                   size=bicluster_shape)
 
             biclusters.append(Bicluster(row_indices, col_indices))
-            # print(max(self.sec_param))
 
         # Write the performance time
         with open('human_performance.txt', 'a') as saveFile:
@@ -144,12 +131,12 @@ class ChengChurchAlgorithm(BaseBiclusteringAlgorithm):
     def _multiple_node_deletion(self, P_in_0, P_in_1, rows_0, cols_0, rows_1, cols_1, msr_thr):
         """Performs the multiple row/column deletion step (this is a direct implementation of the Algorithm 2 described
         in the original paper)"""
-        # Calculate MSR
-        residue_0 = self._calculate_residue(P_in_0, rows_0, cols_0)
-        residue_1 = self._calculate_residue(P_in_1, rows_1, cols_1)
+        # Calculate MSRs
+        residue_0 = self._calculate_residue(P_in_0, rows_0, cols_0, 1, 0, 0)
+        residue_1 = self._calculate_residue(P_in_1, rows_1, cols_1, 1, 0, 0)
 
-        msr_0, row_msr_0, col_msr_0 = self._calculate_msr(residue_0 + residue_1)
-        msr_1, row_msr_1, col_msr_1 = self._calculate_msr(residue_0 + residue_1)
+        msr_0, row_msr_0, col_msr_0 = self._calculate_msr(residue_0 + residue_1, 1, 0, 0)
+        msr_1, row_msr_1, col_msr_1 = self._calculate_msr(residue_0 + residue_1, 1, 0, 0)
 
         # Check whether the MSR is below or equal to threshold
         stop_itr_0 = msr_thr - msr_0
@@ -179,11 +166,11 @@ class ChengChurchAlgorithm(BaseBiclusteringAlgorithm):
                 rows_1[rows2remove] = False
 
                 # Recalculate the score
-                residue_0 = self._calculate_residue(P_in_0, rows_0, cols_0)
-                residue_1 = self._calculate_residue(P_in_1, rows_1, cols_1)
+                residue_0 = self._calculate_residue(P_in_0, rows_0, cols_0, 1, 0, 0)
+                residue_1 = self._calculate_residue(P_in_1, rows_1, cols_1, 1, 0, 0)
 
-                msr_0, row_msr_0, col_msr_0 = self._calculate_msr(residue_0 + residue_1)
-                msr_1, row_msr_1, col_msr_1 = self._calculate_msr(residue_0 + residue_1)
+                msr_0, row_msr_0, col_msr_0 = self._calculate_msr(residue_0 + residue_1, 1, 0, 0)
+                msr_1, row_msr_1, col_msr_1 = self._calculate_msr(residue_0 + residue_1, 1, 0, 0)
 
                 # Check whether columns are ready to remove
                 c2remove_con_0 = col_msr_0 - self.multiple_node_deletion_threshold * msr_0
@@ -198,13 +185,13 @@ class ChengChurchAlgorithm(BaseBiclusteringAlgorithm):
                 cols_1[cols2remove] = False
 
             # Recalculate the score
-            residue_0 = self._calculate_residue(P_in_0, rows_0, cols_0)
-            residue_1 = self._calculate_residue(P_in_1, rows_1, cols_1)
+            residue_0 = self._calculate_residue(P_in_0, rows_0, cols_0, 1, 0, 0)
+            residue_1 = self._calculate_residue(P_in_1, rows_1, cols_1, 1, 0, 0)
 
-            msr_0, row_msr_0, col_msr_0 = self._calculate_msr(residue_0 + residue_1)
-            msr_1, row_msr_1, col_msr_1 = self._calculate_msr(residue_0 + residue_1)
+            msr_0, row_msr_0, col_msr_0 = self._calculate_msr(residue_0 + residue_1, 1, 0, 0)
+            msr_1, row_msr_1, col_msr_1 = self._calculate_msr(residue_0 + residue_1, 1, 0, 0)
 
-            # Check whether the MSR is below or equal to threshold or any nodes have been removed
+            # Check whether the MSR is below/equal to threshold or any nodes have been removed
             stop_itr_0 = msr_thr - msr_0
             stop_itr_1 = msr_thr - msr_1
             stop_con1 = self.fss_evaluation(stop_itr_0, stop_itr_1, 1)
@@ -221,32 +208,75 @@ class ChengChurchAlgorithm(BaseBiclusteringAlgorithm):
             stop_it = (stop_con1 * stop_it_nodes) + (stop_con1 + stop_it_nodes)
             stop = np.divmod(stop_it, 2)[1]
 
-    def _node_addition(self, data, rows, cols):
+    def _node_addition(self, P_in_0, P_in_1, rows_0, cols_0, rows_1, cols_1):
         """Performs the row/column addition step (this is a direct implementation of the Algorithm 3 described in
         the original paper)"""
         stop = False
         while not stop:
-            cols_old = np.copy(cols)
-            rows_old = np.copy(rows)
+            cols0_st = np.copy(cols_0)
+            rows0_st = np.copy(rows_0)
 
-            msr, _, _ = self._calculate_msr(data, rows, cols)
-            # col_msr = self._calculate_msr_col_addition(data, rows, cols, t_score)
-            #
-            # cols2add_fss = self.fss_evaluation(msr - col_msr, t_share, t_comp)
-            # cols2add = np.nonzero(cols2add_fss)
-            # cols[cols2add] = True
-            #
-            # msr, _, _ = self._calculate_msr(data, rows, cols, t_score)
-            # row_msr = self._calculate_msr_row_addition(data, rows, cols, t_score)
-            #
-            # row2add_fss = self.fss_evaluation(msr - row_msr, t_share, t_comp)
-            # rows2add = np.nonzero(row2add_fss)
-            # rows[rows2add] = True
+            cols1_st = np.copy(cols_1)
+            rows1_st = np.copy(rows_1)
 
-            if np.all(rows == rows_old) and np.all(cols == cols_old):
-                stop = True
+            # Calculate score for whole matrix and that of columns
+            residue_0 = self._calculate_residue(P_in_0, rows_0, cols_0, 1, 0, 0)
+            residue_1 = self._calculate_residue(P_in_1, rows_1, cols_1, 1, 0, 0)
 
-    def _calculate_residue(self, data, rows, cols):
+            msr_0, _, _ = self._calculate_msr(residue_0 + residue_1, 1, 0, 0)
+            msr_1, _, _ = self._calculate_msr(residue_0 + residue_1, 1, 0, 0)
+
+            residue_0 = self._calculate_residue(P_in_0, rows_0, cols_0, 0, 1, 0)
+            residue_1 = self._calculate_residue(P_in_1, rows_1, cols_1, 0, 1, 0)
+
+            col_msr_0 = self._calculate_msr(residue_0 + residue_1, 0, 1, 0)
+            col_msr_1 = self._calculate_msr(residue_0 + residue_1, 0, 1, 0)
+
+            # Check whether columns are ready to add
+            c2add_con_0 = msr_0 - col_msr_0
+            c2add_con_1 = msr_1 - col_msr_1
+            fss_rs_cols = self.fss_evaluation_without_len(c2add_con_0, c2add_con_1)
+
+            # Then add those which are in the range of addition
+            cols2add = np.nonzero(fss_rs_cols)
+            cols_0[cols2add] = True
+            cols_1[cols2add] = True
+
+            # Calculate score for whole matrix and that of rows
+            residue_0 = self._calculate_residue(P_in_0, rows_0, cols_0, 1, 0, 0)
+            residue_1 = self._calculate_residue(P_in_1, rows_1, cols_1, 1, 0, 0)
+
+            msr_0, _, _ = self._calculate_msr(residue_0 + residue_1, 1, 0, 0)
+            msr_1, _, _ = self._calculate_msr(residue_0 + residue_1, 1, 0, 0)
+
+            residue_0 = self._calculate_residue(P_in_0, rows_0, cols_0, 0, 0, 1)
+            residue_1 = self._calculate_residue(P_in_1, rows_1, cols_1, 0, 0, 1)
+
+            row_msr_0 = self._calculate_msr(residue_0 + residue_1, 0, 0, 1)
+            row_msr_1 = self._calculate_msr(residue_0 + residue_1, 0, 0, 1)
+
+            # Check whether rows are ready to add
+            r2add_con_0 = msr_0 - row_msr_0
+            r2add_con_1 = msr_1 - row_msr_1
+            fss_rs_rows = self.fss_evaluation_without_len(r2add_con_0, r2add_con_1)
+
+            # Then add those which are in the range of addition
+            rows2add = np.nonzero(fss_rs_rows)
+            rows_0[rows2add] = True
+            rows_1[rows2add] = True
+
+            # Check whether any nodes have been removed
+            stop_itr_r0 = np.sum(rows_0 - (rows0_st).astype(int))
+            stop_itr_r1 = np.sum(rows_1 - (rows1_st).astype(int))
+            stop_it_r = self.fss_evaluation(stop_itr_r0, stop_itr_r1, 1)
+
+            stop_itr_c0 = np.sum(cols_0 - (cols0_st).astype(int))
+            stop_itr_c1 = np.sum(cols_1 - (cols1_st).astype(int))
+            stop_it_c = self.fss_evaluation(stop_itr_c0, stop_itr_c1, 1)
+
+            stop = stop_it_r * stop_it_c
+
+    def _calculate_residue(self, data, rows, cols, multidel, coladd, rowadd):
         """Calculate the mean squared residues of the rows, of the columns and of the full data matrix."""
         # Calculate performance
         # t_sc_0 = time.perf_counter()
@@ -254,8 +284,8 @@ class ChengChurchAlgorithm(BaseBiclusteringAlgorithm):
         sub_data = data[rows][:, cols]
         l_r = len(rows)
         l_c = len(cols)
-        n_elements = l_r * l_c
 
+        # First approach for getting sums and one big division at the end
         """msr = np.sum((sub_data * n_elements - sub_data.sum(axis=0) * l_c
                           - np.expand_dims(sub_data.sum(axis=1), axis=1) * l_r + sub_data.sum()) ** 2) / (
                               n_elements ** 3)
@@ -267,27 +297,49 @@ class ChengChurchAlgorithm(BaseBiclusteringAlgorithm):
         col_msr = np.sum((sub_data * n_elements - sub_data.sum(axis=0) * l_c
                               - np.expand_dims(sub_data.sum(axis=1), axis=1) * l_r + sub_data.sum()) ** 2, axis=0) / (
                                   (n_elements ** 2) * l_r)"""
+        # Check which action is being performed; then mask the residue and send it back
+        if multidel:
+            data_mean = np.mean(sub_data)
+            row_means = np.mean(sub_data, axis=1)
+            col_means = np.mean(sub_data, axis=0)
+            residues = (sub_data - row_means[:, np.newaxis] - col_means + data_mean)
+            rng = np.random.default_rng(seed=42)
+            mask = np.random.uniform(low=0, high=1, size=residues.shape)
+            # mask = rng.integers(0, 1, size=residues.shape)
 
-        data_mean = np.mean(sub_data)
-        row_means = np.mean(sub_data, axis=1)
-        col_means = np.mean(sub_data, axis=0)
+            return mask + residues
 
-        residues = (sub_data - row_means[:, np.newaxis] - col_means + data_mean)
+        elif coladd:
+            sub_data = data[rows][:, cols]
+            sub_data_rows = data[rows]
+            data_mean = np.mean(sub_data)
+            row_means = np.mean(sub_data, axis=1)
+            col_means = np.mean(sub_data_rows, axis=0)
+            col_residues = sub_data_rows - row_means[:, np.newaxis] - col_means + data_mean
+            rng = np.random.default_rng(seed=42)
+            mask = np.random.uniform(low=0, high=1, size=col_residues.shape)
+            # mask = rng.integers(0, 1, size=col_residues.shape)
 
-        rng = np.random.default_rng(seed=42)
-        mask = rng.integers(0, 1, size=residues.shape)
+            return mask + col_residues
 
-        return mask + residues
+        else:
+            sub_data = data[rows][:, cols]
+            sub_data_cols = data[:, cols]
+            data_mean = np.mean(sub_data)
+            row_means = np.mean(sub_data_cols, axis=1)
+            col_means = np.mean(sub_data, axis=0)
+            row_residues = sub_data_cols - row_means[:, np.newaxis] - col_means + data_mean
+            rng = np.random.default_rng(seed=42)
+            # mask = rng.integers(0, 1, size=row_residues.shape)
+            mask = np.random.uniform(0, 1, size=row_residues.shape)
 
-    def _calculate_msr(self, residues):
+            return mask + row_residues
 
-        squared_residues = residues * residues
-
-        msr = np.mean(squared_residues)
-        row_msr = np.mean(squared_residues, axis=1)
-        col_msr = np.mean(squared_residues, axis=0)
-
-        """ t_sc_1 = time.perf_counter()
+    def _calculate_msr(self, residues, multidel, coladd, rowadd):
+        # Calculate performance
+        """
+        t_sc_0 = time.perf_counter()
+        t_sc_1 = time.perf_counter()
         t_score.append(t_sc_1 - t_sc_0)
 
         with open('t_score_size.txt', 'w') as saveFile:
@@ -301,8 +353,26 @@ class ChengChurchAlgorithm(BaseBiclusteringAlgorithm):
         t_share.append(t_sh_1 - t_sh_0)
         t_score.append(os.path.getsize("t_score_size.txt"))
 """
-        return msr, row_msr, col_msr
 
+        # Check which action is being performed; then send msr, or that of rows and columns back
+        if multidel:
+            squared_residues = residues * residues
+            msr = np.mean(squared_residues)
+            row_msr = np.mean(squared_residues, axis=1)
+            col_msr = np.mean(squared_residues, axis=0)
+            return msr, row_msr, col_msr
+
+        elif coladd:
+            col_squared_residues = residues * residues
+            col_msr = np.mean(col_squared_residues, axis=0)
+            return col_msr
+
+        else:
+            row_squared_residues = residues * residues
+            row_msr = np.mean(row_squared_residues, axis=1)
+            return row_msr
+
+    # Second approach to find the score for columns
     def _calculate_msr_col_addition(self, data, rows, cols, t_score):
         """Calculate the mean squared residues of the columns for the node addition step."""
         # Calculate performance
@@ -331,6 +401,7 @@ class ChengChurchAlgorithm(BaseBiclusteringAlgorithm):
 
         return col_msr
 
+    # Second approach to find the score for rows
     def _calculate_msr_row_addition(self, data, rows, cols, t_score):
         """Calculate the mean squared residues of the rows and of the inverse of the rows for
         the node addition step."""
@@ -360,7 +431,8 @@ class ChengChurchAlgorithm(BaseBiclusteringAlgorithm):
 
         return row_msr
 
-    def del_add_node(self, P_0, P_1, u, v, K, l, gamma):
+    # Generation of Beaver Triples for multiplication
+    def beaver_triples(self, P_0, P_1, u, v, K, l, gamma):
         d_u0, d_u1, d_v0, d_v1, d_w0, d_w1, r_in0, r_in1, k0, k1 = funshade.setup(K, l, gamma)
 
         # Distribute randomness to (P0, P1)
@@ -388,15 +460,17 @@ class ChengChurchAlgorithm(BaseBiclusteringAlgorithm):
 
         return rem_add_0, rem_add_1
 
+    # FSS Sign Evaluation when having len already known
     def fss_evaluation(self, share_0, share_1, len):
         """Calculate the function secrete sharing of the secret share of input and output whether to remove/ add nodes
         from/ to matrix"""
-        # Input parameters threshold, inputs, and length of matrix
+        # Input parameters threshold, and length of matrix
         gamma = 0
         z_0 = share_0.astype(funshade.DTYPE)
         z_1 = share_1.astype(funshade.DTYPE)
         K = len
 
+        # Create parties
         class party:
             def __init__(self, j: int):
                 self.j = j
@@ -412,24 +486,17 @@ class ChengChurchAlgorithm(BaseBiclusteringAlgorithm):
         P0.k_j = k0
         P1.k_j = k1
 
-        # # Secrete share the input
-        # rng = np.random.default_rng(seed=42)
-        # z_0 = rng.integers(np.iinfo(funshade.DTYPE).min,
-        #                    np.iinfo(funshade.DTYPE).max, size=K, dtype=funshade.DTYPE)
-        # z_1 = z - z_0
-
         # Send the shares to the parties
-        # and calculate the performance and communication
+        # Calculate the performance and communication
         # t_sh_0 = time.perf_counter()
         P0.z_j = z_0
         P1.z_j = z_1
 
         # t_sh_1 = time.perf_counter()
         # t_share.append(t_sh_1 - t_sh_0)
-
-        # Mask the public input to FSS gate
         # t_sh_0 = time.perf_counter()
 
+        # Mask the public input to FSS gate
         P0.z_hat_j = P0.z_j + P0.r_in_j
         P1.z_hat_j = P1.z_j + P1.r_in_j
 
@@ -448,7 +515,7 @@ class ChengChurchAlgorithm(BaseBiclusteringAlgorithm):
 
         # Construct the output of both parties
         o = P0.o_j + P1.o_j
-        t_sh_1 = time.perf_counter()
+        # t_sh_1 = time.perf_counter()
         # t_share.append(os.path.getsize("t_share_size.txt"))
         # t_share.append((t_sh_1 - t_sh_0))
 
@@ -462,16 +529,17 @@ class ChengChurchAlgorithm(BaseBiclusteringAlgorithm):
 
         return o
 
+    # FSS Sign Evaluation when not having len already known
     def fss_evaluation_without_len(self, share_0, share_1):
         """Calculate the function secrete sharing of the secret share of input and output whether to remove/ add nodes
         from/ to matrix"""
-        # Input parameters threshold, inputs, and length of matrix
+        # Input parameters threshold, and length of matrix
         gamma = 0
         z_0 = share_0.astype(funshade.DTYPE)
         z_1 = share_1.astype(funshade.DTYPE)
         K = len(z_0)
-        # K = len
 
+        # Create parties
         class party:
             def __init__(self, j: int):
                 self.j = j
@@ -502,10 +570,9 @@ class ChengChurchAlgorithm(BaseBiclusteringAlgorithm):
 
         # t_sh_1 = time.perf_counter()
         # t_share.append(t_sh_1 - t_sh_0)
-
-        # Mask the public input to FSS gate
         # t_sh_0 = time.perf_counter()
 
+        # Mask the public input to FSS gate
         P0.z_hat_j = P0.z_j + P0.r_in_j
         P1.z_hat_j = P1.z_j + P1.r_in_j
 
