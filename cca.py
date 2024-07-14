@@ -87,7 +87,7 @@ class ChengChurchAlgorithm(BaseBiclusteringAlgorithm):
         P_0.in_d = in_0
         P_1.in_d = in_1
 
-        # input matrices before score findidng and removal/ addition
+        # input matrices before score finding and removal/ addition
         rows_0 = np.ones(num_row_0, dtype=bool)
         cols_0 = np.ones(num_col_0, dtype=bool)
 
@@ -97,10 +97,10 @@ class ChengChurchAlgorithm(BaseBiclusteringAlgorithm):
         # For number of biclusters
         for i in range(self.num_biclusters):
 
-
             # Steps including multiple deletion/ addition
-            rows_0, cols_0, rows_1, cols_1 = self._multiple_node_deletion(in_0, in_1, rows_0, cols_0, rows_1, cols_1, self.msr_threshold)
-            # self._node_addition(in_0, in_1, rows_0, cols_0, rows_1, cols_1)
+            rows_0, cols_0, rows_1, cols_1 = self._multiple_node_deletion(in_0, in_1, rows_0, cols_0, rows_1, cols_1,
+                                                                          self.msr_threshold)
+            rows_0, cols_0, rows_1, cols_1 = self._node_addition(in_0, in_1, rows_0, cols_0, rows_1, cols_1)
 
             # Output shares to reconstruct the final matrix
             rows = rows_0
@@ -121,19 +121,19 @@ class ChengChurchAlgorithm(BaseBiclusteringAlgorithm):
             biclusters.append(Bicluster(row_indices, col_indices))
 
         # Write the performance time
-        with open('human_performance.txt', 'a') as saveFile:
+        """with open('human_performance.txt', 'a') as saveFile:
             saveFile.write("\n")
             saveFile.write("Parties size:" + str(np.mean(t_share)) + "\n")
             # saveFile.write("t_score:" + str(np.mean(t_score)) + "\t")
             # saveFile.write("t_comp:" + str(np.mean(t_comp)) + "\t")
-            # saveFile.write("\n")
+            # saveFile.write("\n")"""
 
         return Biclustering(biclusters)
 
     def _multiple_node_deletion(self, P_in_0, P_in_1, rows_0, cols_0, rows_1, cols_1, msr_thr):
         """Performs the multiple row/column deletion step (this is a direct implementation of the Algorithm 2 described
         in the original paper)"""
-        # For approach second
+        # For second approach
         """num_row_0, num_col_0 = P_in_0.shape
         num_row_1, num_col_1 = P_in_1.shape"""
 
@@ -160,35 +160,48 @@ class ChengChurchAlgorithm(BaseBiclusteringAlgorithm):
             if len(rows_0) or len(cols_0) >= self.data_min_cols:
 
                 # Check whether rows are ready to remove
-                r2remove_con_0 = row_msr_0 - self.multiple_node_deletion_threshold * msr_0
-                r2remove_con_1 = row_msr_1 - self.multiple_node_deletion_threshold * msr_1
-                fss_rs_rows = self.fss_evaluation_without_len(r2remove_con_0, r2remove_con_1)
-
-                # For approach second
-                """r2remove_con_0 = self.multiple_node_deletion_threshold * msr_0 - row_msr_0
-                r2remove_con_1 = self.multiple_node_deletion_threshold * msr_1 - row_msr_1
-                fss_rs_rows = self.fss_evaluation_without_len(r2remove_con_0, r2remove_con_1)"""
-
                 # Then remove those which are in the range of removal
-                rows2remove_fss = np.nonzero(fss_rs_rows)
+
+                # For first approach
+                """r2remove_con_0 = row_msr_0 - (self.multiple_node_deletion_threshold * msr_0)
+                r2remove_con_1 = row_msr_1 - (self.multiple_node_deletion_threshold * msr_1)
+                fss_rs_rows_old = self.fss_evaluation_without_len(r2remove_con_0, r2remove_con_1)"""
+
+                """rows2remove_fss = np.nonzero(fss_rs_rows_old)
                 row_indices = np.nonzero(rows_0)[0]
                 rows2remove = row_indices[rows2remove_fss]
                 rows_0[rows2remove] = False
-                rows_1[rows2remove] = False
+                rows_1[rows2remove] = False"""
 
-                # Second our for removal
-                """if (fss_rs_rows.size < rows_1.size):
-                    fss_rows_appended = np.pad(fss_rs_rows, (0, np.prod(rows_1.shape) - fss_rs_rows.size), 'constant', constant_values=1)
-                    reshaped_array = fss_rows_appended.reshape(rows_1.shape)
-                    rows_0 = ((rows_0 * reshaped_array).astype(int)).astype(bool)
-                    rows_1 = ((rows_1 * reshaped_array).astype(int)).astype(bool)
+                # For second approach
+                r2remove_con_0 = self.multiple_node_deletion_threshold * msr_0 - row_msr_0
+                r2remove_con_1 = self.multiple_node_deletion_threshold * msr_1 - row_msr_1
+                fss_rs_rows = self.fss_evaluation_without_len(r2remove_con_0, r2remove_con_1)
+
+                rows_0_non_zero = np.nonzero(rows_0)
+                rows_1_non_zero = np.nonzero(rows_1)
+
+                rows_0[rows_0_non_zero] = (rows_0[rows_0_non_zero].astype(int) * fss_rs_rows).astype(bool)
+                rows_1[rows_1_non_zero] = (rows_1[rows_1_non_zero].astype(int) * fss_rs_rows).astype(bool)
+
+                # Simply with numpy
+                """rows2removes = row_indices[np.where(row_msr_0 > self.multiple_node_deletion_threshold * msr_0)]
+                rows_0[rows2removes] = False"""
+
+                # For second approach
+                """fss_size_rows = fss_rs_rows.size
+                row_size = rows_1.size"""
+
+                # Some additional approach
+                """if (fss_size_rows < row_size):
+                    removed_rows_0 = ((rows_0[:fss_size_rows] * fss_rs_rows).astype(int)).astype(bool)
+                    removed_rows_1 = ((rows_1[:fss_size_rows] * fss_rs_rows).astype(int)).astype(bool)
+                    rows_0 = np.append(removed_rows_0, rows_0[fss_size_rows:row_size])
+                    rows_1 = np.append(removed_rows_1, rows_1[fss_size_rows:row_size])
 
                 else:
                     rows_0 = ((rows_0 * fss_rs_rows).astype(int)).astype(bool)
-                    rows_1 = ((rows_1 * fss_rs_rows).astype(int)).astype(bool)
-                    
-                num_row_0 = sum(fss_rs_rows)
-                num_row_1 = sum(fss_rs_rows)"""
+                    rows_1 = ((rows_1 * fss_rs_rows).astype(int)).astype(bool)"""
 
                 # Recalculate the score
                 residue_0 = self._calculate_residue(P_in_0, rows_0, cols_0, 1, 0, 0)
@@ -198,23 +211,44 @@ class ChengChurchAlgorithm(BaseBiclusteringAlgorithm):
                 msr_1, row_msr_1, col_msr_1 = self._calculate_msr(residue_0 + residue_1, 1, 0, 0)
 
                 # Check whether columns are ready to remove
-                c2remove_con_0 = col_msr_0 - self.multiple_node_deletion_threshold * msr_0
-                c2remove_con_1 = col_msr_1 - self.multiple_node_deletion_threshold * msr_1
-                fss_rs_cols = self.fss_evaluation_without_len(c2remove_con_0, c2remove_con_1)
-
-                # For approach second
-                """c2remove_con_0 = self.multiple_node_deletion_threshold * msr_0 - col_msr_0
-                c2remove_con_1 = self.multiple_node_deletion_threshold * msr_1 - col_msr_1
-                fss_rs_cols = self.fss_evaluation_without_len(c2remove_con_0, c2remove_con_1)
-                num_cols_0 = sum(fss_rs_cols)
-                num_cols_1 = sum(fss_rs_cols)"""
-
                 # Then remove those which are in the range of removal
-                cols2remove_fss = np.nonzero(fss_rs_cols)
+
+                # For first approach
+                """c2remove_con_0 = col_msr_0 - self.multiple_node_deletion_threshold * msr_0
+                c2remove_con_1 = col_msr_1 - self.multiple_node_deletion_threshold * msr_1
+                fss_rs_cols = self.fss_evaluation_without_len(c2remove_con_0, c2remove_con_1)"""
+
+                """cols2remove_fss = np.nonzero(fss_rs_cols)
                 col_indices = np.nonzero(cols_0)[0]
                 cols2remove = col_indices[cols2remove_fss]
                 cols_0[cols2remove] = False
-                cols_1[cols2remove] = False
+                cols_1[cols2remove] = False"""
+
+                # For approach second
+                c2remove_con_0 = self.multiple_node_deletion_threshold * msr_0 - col_msr_0
+                c2remove_con_1 = self.multiple_node_deletion_threshold * msr_1 - col_msr_1
+                fss_rs_cols = self.fss_evaluation_without_len(c2remove_con_0, c2remove_con_1)
+
+                cols_0_non_zero = np.nonzero(cols_0)
+                cols_1_non_zero = np.nonzero(cols_1)
+
+                cols_0[cols_0_non_zero] = (cols_0[cols_0_non_zero].astype(int) * fss_rs_cols).astype(bool)
+                cols_1[cols_1_non_zero] = (cols_1[cols_1_non_zero].astype(int) * fss_rs_cols).astype(bool)
+
+                # For second approach
+                """fss_size_cols = fss_rs_cols.size
+                col_size = cols_0.size"""
+
+                # Some additional approach
+                """if (fss_size_cols < col_size):
+                    removed_cols_0 = ((cols_0[:fss_size_cols] * fss_rs_cols).astype(int)).astype(bool)
+                    removed_cols_1 = ((cols_1[:fss_size_cols] * fss_rs_cols).astype(int)).astype(bool)
+                    cols_0 = np.append(removed_cols_0, cols_0[fss_size_cols:col_size])
+                    cols_1 = np.append(removed_cols_1, cols_1[fss_size_cols:col_size])
+
+                else:
+                    cols_0 = ((cols_0 * fss_rs_cols).astype(int)).astype(bool)
+                    cols_1 = ((cols_1 * fss_rs_cols).astype(int)).astype(bool)"""
 
             # Recalculate the score
             residue_0 = self._calculate_residue(P_in_0, rows_0, cols_0,  1, 0, 0)
@@ -273,8 +307,8 @@ class ChengChurchAlgorithm(BaseBiclusteringAlgorithm):
 
             # Then add those which are in the range of addition
             cols2add = np.nonzero(fss_rs_cols)
-            cols_0[cols2add] = True
-            cols_1[cols2add] = True
+            cols_0[cols2add] = (cols_0[cols2add].astype(int) + 1).astype(bool)
+            cols_1[cols2add] = (cols_1[cols2add].astype(int) + 1).astype(bool)
 
             # Calculate score for whole matrix and that of rows
             residue_0 = self._calculate_residue(P_in_0, rows_0, cols_0, 1, 0, 0)
@@ -296,8 +330,8 @@ class ChengChurchAlgorithm(BaseBiclusteringAlgorithm):
 
             # Then add those which are in the range of addition
             rows2add = np.nonzero(fss_rs_rows)
-            rows_0[rows2add] = True
-            rows_1[rows2add] = True
+            rows_0[rows2add] = (rows_0[rows2add].astype(int) + 1).astype(bool)
+            rows_1[rows2add] = (rows_1[rows2add].astype(int) + 1).astype(bool)
 
             # Check whether any nodes have been removed
             stop_itr_r0 = np.sum(rows_0 - (rows0_st).astype(int))
@@ -309,6 +343,8 @@ class ChengChurchAlgorithm(BaseBiclusteringAlgorithm):
             stop_it_c = self.fss_evaluation(stop_itr_c0, stop_itr_c1, 1)
 
             stop = stop_it_r * stop_it_c
+
+        return rows_0, cols_0, rows_1, cols_1
 
     def _calculate_residue(self, data, rows, cols, multidel, coladd, rowadd):
         """Calculate the mean squared residues of the rows, of the columns and of the full data matrix."""
