@@ -70,32 +70,32 @@ class ChengChurchAlgorithm(BaseBiclusteringAlgorithm):
         biclusters = []
         t_share, t_score, t_comp = [], [], []
 
-        num_rows, num_cols = data.shape
-        min_value = np.min(data)
-        max_value = np.max(data)
-
-        # Generate secret shares of the input data
-        rng = np.random.default_rng(seed=42)
-        in_0 = rng.integers(0, self.highest_range, size=(num_rows, num_cols), dtype="int64")
-        in_1 = data - in_0
-
-        # Shape of inputs for both parties
-        num_row_0, num_col_0 = in_0.shape
-        num_row_1, num_col_1 = in_1.shape
-
-        # Assign secret shares to parties
-        P_0.in_d = in_0
-        P_1.in_d = in_1
-
-        # input matrices before score finding and removal/ addition
-        rows_0 = np.ones(num_row_0, dtype=bool)
-        cols_0 = np.ones(num_col_0, dtype=bool)
-
-        rows_1 = np.ones(num_row_1, dtype=bool)
-        cols_1 = np.ones(num_col_1, dtype=bool)
-
         # For number of biclusters
         for i in range(self.num_biclusters):
+
+            # Generate secret shares of the input data
+            rng = np.random.default_rng(seed=42)
+            in_0 = rng.integers(0, self.highest_range, size=(num_rows, num_cols), dtype="int64")
+            in_1 = data - in_0
+
+            # Shape of inputs for both parties and data shape
+            num_rows, num_cols = data.shape
+            min_value = np.min(data)
+            max_value = np.max(data)
+
+            num_row_0, num_col_0 = in_0.shape
+            num_row_1, num_col_1 = in_1.shape
+
+            # Assign secret shares to parties
+            P_0.in_d = in_0
+            P_1.in_d = in_1
+
+            # Input matrices before score finding and removal/ addition of nodes
+            rows_0 = np.ones(num_row_0, dtype=bool)
+            cols_0 = np.ones(num_col_0, dtype=bool)
+
+            rows_1 = np.ones(num_row_1, dtype=bool)
+            cols_1 = np.ones(num_col_1, dtype=bool)
 
             # Steps including multiple deletion/ addition
             rows_0, cols_0, rows_1, cols_1 = self._multiple_node_deletion(in_0, in_1, rows_0, cols_0, rows_1, cols_1,
