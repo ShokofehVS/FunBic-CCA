@@ -79,7 +79,7 @@ class ChengChurchAlgorithm(BaseBiclusteringAlgorithm):
             rows = np.ones(num_rows, dtype=bool)
             cols = np.ones(num_cols, dtype=bool)
 
-            # self._multiple_node_deletion(data, rows, cols, self.msr_threshold)
+            self._multiple_node_deletion(data, rows, cols, self.msr_threshold)
             self._node_addition(data, rows, cols)
 
             row_indices = np.nonzero(rows)[0]
@@ -105,29 +105,27 @@ class ChengChurchAlgorithm(BaseBiclusteringAlgorithm):
         stop = True if msr <= msr_thr else False
 
         while not stop:
-            if len(rows) or len(cols) >= self.data_min_cols:
-                cols_old = np.copy(cols)
-                rows_old = np.copy(rows)
+            cols_old = np.copy(cols)
+            rows_old = np.copy(rows)
 
-                row_indices = np.nonzero(rows)[0]
-                rows2remove = row_indices[np.where(row_msr > self.multiple_node_deletion_threshold * msr)]
-                # print("rows2removeORG", rows2remove)
-                rows[rows2remove] = False
+            row_indices = np.nonzero(rows)[0]
+            rows2remove = row_indices[np.where(row_msr > self.multiple_node_deletion_threshold * msr)]
+            rows[rows2remove] = False
 
+            if len(cols) >= self.data_min_cols:
                 msr, row_msr, col_msr = self._calculate_msr(data, rows, cols)
                 col_indices = np.nonzero(cols)[0]
-                # print("np_result", np.where(col_msr > self.multiple_node_deletion_threshold * msr))
                 cols2remove = col_indices[np.where(col_msr > self.multiple_node_deletion_threshold * msr)]
-                # print("cols2removeORG", cols2remove)
                 cols[cols2remove] = False
 
-            # msr, row_msr, col_msr = self._calculate_msr(data, rows, cols)
+            msr, row_msr, col_msr = self._calculate_msr(data, rows, cols)
 
             # Tests if the new MSR value is smaller than the acceptable MSR threshold.
             # Tests if no rows and no columns were removed during this iteration.
             # If one of the conditions is true the loop must stop, otherwise it will become an infinite loop.
             if msr <= msr_thr or (np.all(rows == rows_old) and np.all(cols == cols_old)):
                 stop = True
+
 
     def _node_addition(self, data, rows, cols):
         """Performs the row/column addition step (this is a direct implementation of the Algorithm 3 described in
@@ -165,7 +163,8 @@ class ChengChurchAlgorithm(BaseBiclusteringAlgorithm):
         msr = np.mean(squared_residues)
         row_msr = np.mean(squared_residues, axis=1)
         col_msr = np.mean(squared_residues, axis=0)
-        # print(msr)
+
+
         return msr, row_msr, col_msr
 
     def _calculate_msr_col_addition(self, data, rows, cols):
@@ -180,6 +179,7 @@ class ChengChurchAlgorithm(BaseBiclusteringAlgorithm):
         col_residues = sub_data_rows - row_means[:, np.newaxis] - col_means + data_mean
         col_squared_residues = col_residues * col_residues
         col_msr = np.mean(col_squared_residues, axis=0)
+
 
         return col_msr
 
@@ -196,6 +196,7 @@ class ChengChurchAlgorithm(BaseBiclusteringAlgorithm):
         row_residues = sub_data_cols - row_means[:, np.newaxis] - col_means + data_mean
         row_squared_residues = row_residues * row_residues
         row_msr = np.mean(row_squared_residues, axis=1)
+
 
         return row_msr
 
