@@ -179,7 +179,7 @@ class ChengChurchAlgorithm(BaseBiclusteringAlgorithm):
         else:
             while not stop:
                 # Store previous values of matrices for equality check
-                cp_in_0 = in_0;                 cp_in_1 = in_1
+                cp_in_0 = np.copy(in_0);                 cp_in_1 = np.copy(in_1)
 
                 # FSS IC gate to check which rows should be removed
                 # Calculate the performance and communication of Eval
