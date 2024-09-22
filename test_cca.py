@@ -1,20 +1,20 @@
-import math
 import numpy as np
 import cca
 import origCCA
 import pandas as pd
-from os.path import dirname, join
-from urllib.request import urlopen
 import accuracy
 import seaborn as sns
 import matplotlib.pyplot as plt
+import time
+import funshade
+import random
+import warnings
 
-# Numpy sample data generation
-"""n_rows, n_cols = 512, 17
-n_elements = n_rows*n_cols
-# np.random.seed(42) # Fixed seed for reproducibility
-data = np.random.randint(0, 600, size=(n_rows, n_cols)) #IT CANNOT GO BEYOND THAT DUE TO HIGH NUMBER OF BITS OF INTEGER!
-print(data)"""
+from os.path import dirname, join
+from urllib.request import urlopen
+
+warnings.filterwarnings("ignore", category=RuntimeWarning)
+
 
 # Yeast Cell Cycle Data Set Generation
 def load_yeast_tavazoie():
@@ -35,9 +35,10 @@ def load_yeast_tavazoie():
     return pd.DataFrame(data, index=genes)
 
 
+# Human Gene Expression Data Set Generation
 def load_human_data():
-    with urlopen("http://arep.med.harvard.edu/biclustering/lymphoma.matrix") as f:
-        lines = f.read().decode('utf-8').strip().split('\n')
+    with open("lymphoma.matrix.txt") as f:
+        lines = f.read().strip().split('\n')
         lines = list(' -'.join(line.split('-')).split(' ') for line in lines)
 
         lines = list(list(int(i) for i in line if i) for line in lines)
@@ -50,11 +51,15 @@ def load_human_data():
 
 
 # Load data sets
-data = load_yeast_tavazoie().values
+data   = load_yeast_tavazoie().values
 # data = load_human_data()
 
+# Number of Elements in Matrix
+row, col   = data.shape
+n_elements = row * col
+
 # missing value imputation suggested by Cheng and Church for Yeast data set
-missing = np.where((data <= 0.0))
+missing       = np.where((data <= 0.0))
 data[missing] = np.random.randint(low=1, high=800, size=len(missing[0]))
 
 # missing value imputation suggested by Cheng and Church for Human data set
@@ -65,34 +70,26 @@ data[idx] = generator.randint(1, 800, len(idx[0]))
 missing = np.where((data <= 0.0))
 data[missing] = np.random.randint(low=1, high=800, size=len(missing[0]))"""
 
-# data_transformed = (np.log(data)).astype(int) #ANOTHER DISTRIBUTION
+# Avoid overflow
+max_bit = 2 ** 3 # yeast data
+# max_bit = 2 ** 3 # human data
 
-cca = cca.ChengChurchAlgorithm(num_biclusters=100, msr_threshold=1200,
+# Run the secured and non-secure algorithms
+data_transformed = np.random.randint(1, max_bit, size=(row, col), dtype="int64")
+n_rows, n_cols   = data_transformed.shape
+
+# Creating an instance of the ChengChurchAlgorithm class and running with the parameters of the original study
+cca = cca.ChengChurchAlgorithm(max_bit, num_biclusters=100, msr_threshold=300,
                                multiple_node_deletion_threshold=1.2, data_min_cols=100)
+biclustering_sec  = cca.run(data_transformed)
 
 cca_orig = origCCA.ChengChurchAlgorithm(num_biclusters=100, msr_threshold=1200,
                                         multiple_node_deletion_threshold=1.2, data_min_cols=100)
+biclustering_orig = cca_orig.run(data_transformed)
 
-percent = [1, 5, 10, 30, 50, 70, 90, 100]
-for i in range(len(percent)):
-    # Data distribution for better accuracy
-    data_transformed = (data * (percent[i]/100)).astype(int)
-    n_rows, n_cols = data_transformed.shape
-
-    # Creating an instance of the ChengChurchAlgorithm class and running with the parameters of the original study
-    biclustering = cca.run(data_transformed)
-    biclustering_orig = cca_orig.run(data_transformed)
-
-    # Compare both version with CE, liu and prelic match scores
-    ce = accuracy.clustering_error(biclustering, biclustering_orig, n_rows, n_cols)
-    # prelic = accuracy.prelic_relevance(biclustering,biclustering_orig)
-    # liu_wang = accuracy.liu_wang_match_score(biclustering, biclustering_orig)
-
-    with open('ce.csv', 'a') as saveFile:
-        saveFile.write("\n")
-        saveFile.write(str(ce) + "\t")
-        saveFile.write("%" + str(percent[i]))
-        saveFile.write("\n")
+# Accuracy measurement
+prelic   = accuracy.prelic_relevance(biclustering_sec, biclustering_orig)
+liu_wang = accuracy.liu_wang_match_score(biclustering_sec, biclustering_orig)
 
 
 
