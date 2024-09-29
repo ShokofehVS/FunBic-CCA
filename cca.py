@@ -102,13 +102,19 @@ class ChengChurchAlgorithm(BaseBiclusteringAlgorithm):
                 saveFile.write(str(P_1.aij_1) + "\n")
             t_size.append(os.path.getsize("result_size.txt"))
 
-            # Steps including multiple deletion/ addition
+            # Steps including single, multiple deletion/ addition
             P_0.bij_0, P_1.bij_1, fss_rs_rows_0, fss_rs_rows_1 = self._multiple_node_deletion(P_0.aij_0, P_1.aij_1,
                                                                                               rows_0, cols_0,
                                                                                               rows_1, cols_1,
                                                                                               self.msr_threshold,
                                                                                               t_shareMSR, t_shareEval)
-            P_0.cij_0, P_1.cij_1 = self._node_addition(P_0.bij_0, P_1.bij_1, in_0, in_1,
+
+            P_0.cij_0, P_1.cij_1, fss_rs_rows_0, fss_rs_rows_1 = self._single_node_deletion(P_0.bij_0, P_1.bij_1,
+                                                                                            rows_0, cols_0,
+                                                                                            rows_1, cols_1,
+                                                                                            self.msr_threshold)
+
+            P_0.dij_0, P_1.dij_1 = self._node_addition(P_0.cij_0, P_1.cij_1, in_0, in_1,
                                                        rows_0, cols_0,
                                                        rows_1, cols_1,
                                                        fss_rs_rows_0, fss_rs_rows_1, t_shareMSR, t_shareEval)
@@ -145,6 +151,37 @@ class ChengChurchAlgorithm(BaseBiclusteringAlgorithm):
 
 
         return Biclustering(biclusters)
+
+
+    def _single_node_deletion(self, in_0, in_1, fss_rs_rows_0, fss_rs_rows_1, num_col_0, num_col_1, msr_thr):
+        # Secret shared inputs' shapes
+        num_row_0, num_col_0 = in_0.shape
+        num_row_1, num_col_1 = in_1.shape
+
+        # Calculate first the scores for each node and whole matrix
+        """msr_0, msr_1, row_msr_0, row_msr_1, col_msr_0, col_msr_1 = (self._calculate_scores_multidel
+                                                                    (in_0, in_1,
+                                                                     fss_rs_rows_0, fss_rs_rows_1,
+                                                                     num_col_0, num_col_1))"""
+
+        msr_0, msr_1, row_msr_0, row_msr_1, col_msr_0, col_msr_1 = self._scores_before_steps(in_0, in_1)
+
+        # STOP function -- Check whether the MSR is below or equal to threshold (leak info after fss gate)
+        stop_itr_0 = msr_thr - msr_0
+        stop_itr_1 = msr_thr - msr_1
+        stop = self.fss_evaluation(stop_itr_0, stop_itr_1, 1)
+
+        if stop:
+            # No node have been removed so FSS gate returns nothing
+            fss_rs_rows_0 = np.zeros(num_row_0)
+            fss_rs_rows_1 = np.zeros(num_row_1)
+
+            return in_0, in_1, fss_rs_rows_0, fss_rs_rows_1
+        else:
+            while not stop:
+                # Find the argmax of scores for row and column
+                row_max_msr = self._amx(row_msr_0, row_msr_1)
+                col_max_msr = self._amx(col_msr_0, col_msr_1)
 
 
     def _multiple_node_deletion(self, P_in_0, P_in_1, rows_0, cols_0, rows_1, cols_1, msr_thr, t_shareMSR, t_shareEval):
@@ -276,6 +313,28 @@ class ChengChurchAlgorithm(BaseBiclusteringAlgorithm):
 
 
         return bij_0, bij_1
+
+    def _amx(self, in_0, in_1):
+        """Calculate Argmax of scores of the rows, of the columns."""
+        # Initial values
+        m = len(in_0)
+        argmx_con_0, argmx_con_1, delta_j  = [], [], []
+
+        # Argmax according to AriaNN algorithm 6
+        for j in range(m):
+            for i in range(m):
+                if i != j:
+                    argmx_con_0.append(in_0[j] - in_0[i])
+                    argmx_con_1.append(in_1[j] - in_1[i])
+                else:
+                    pass
+            node_max_0, node_max_1 = self.fss_evaluation_without_len(np.array(argmx_con_0), np.array(argmx_con_1))
+            s_j_0 = np.sum(node_max_0);                                 s_j_1 = np.sum(node_max_1)
+            delta_j.append(self._equality_check_2(s_j_0, s_j_1, m-1, 0))
+            argmx_con_0, argmx_con_1 = [], []
+            if delta_j[j] == 1:
+                arg_max_res = j
+                return arg_max_res
 
 
     def _scores_before_steps(self, in_0, in_1):
@@ -430,6 +489,47 @@ class ChengChurchAlgorithm(BaseBiclusteringAlgorithm):
 
 
         return stop
+
+    def _equality_check_2(self, in_0, in_1, cp_in_0, cp_in_1):
+        """Determine equality of matrix before and after node deletion; usage in stop function of multiple deletion"""
+        # Determine the number of secret shared elements for keys
+        # n_element = len(in_0)
+        n_element = 1
+
+        # An instance of DPF gate for equality check with 6 threads
+        eq = sycret.EqFactory(n_threads=6)
+
+        # Generation of DPF keys
+        keys_a, keys_b = eq.keygen(n_element)
+
+        # Alpha based on generated keys
+        alpha = eq.alpha(keys_a, keys_b)
+
+        # Secret share the Alpha
+        rng = np.random.default_rng(seed=42)
+        e_rin_0 = rng.integers(1, self.highest_range, size=n_element, dtype="int64")
+        e_rin_1 = alpha - e_rin_0
+
+        # Input shares for DPF gate
+        dpf_in0 = in_0 - cp_in_0
+        dpf_in1 = in_1 - cp_in_1
+
+        # Add the mask to secret shares before reconstruction
+        mdpf_in0 = dpf_in0 + e_rin_0
+        mdpf_in1 = dpf_in1 + e_rin_1
+
+        # Now exchange the masked input to DPF FSS gate
+        f_out = mdpf_in0 + mdpf_in1
+
+        # Apply DPF for equality check
+        r_a, r_b = (
+            eq.eval(0, f_out, keys_a),
+            eq.eval(1, f_out, keys_b),
+        )
+        r_eq = (r_a + r_b) % (2 ** (eq.N * 8))
+
+
+        return r_eq
 
 
     def _cols2Remove(self, in_0, in_1, rows_0, rows_1, cols_0, cols_1, num_row_0, num_col_0, num_row_1, num_col_1):
