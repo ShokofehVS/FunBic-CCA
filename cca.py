@@ -159,12 +159,10 @@ class ChengChurchAlgorithm(BaseBiclusteringAlgorithm):
         num_row_1, num_col_1 = in_1.shape
 
         # Calculate first the scores for each node and whole matrix
-        """msr_0, msr_1, row_msr_0, row_msr_1, col_msr_0, col_msr_1 = (self._calculate_scores_multidel
+        msr_0, msr_1, row_msr_0, row_msr_1, col_msr_0, col_msr_1 = (self._calculate_scores_multidel
                                                                     (in_0, in_1,
                                                                      fss_rs_rows_0, fss_rs_rows_1,
-                                                                     num_col_0, num_col_1))"""
-
-        msr_0, msr_1, row_msr_0, row_msr_1, col_msr_0, col_msr_1 = self._scores_before_steps(in_0, in_1)
+                                                                     num_col_0, num_col_1))
 
         # STOP function -- Check whether the MSR is below or equal to threshold (leak info after fss gate)
         stop_itr_0 = msr_thr - msr_0
@@ -172,16 +170,72 @@ class ChengChurchAlgorithm(BaseBiclusteringAlgorithm):
         stop = self.fss_evaluation(stop_itr_0, stop_itr_1, 1)
 
         if stop:
-            # No node have been removed so FSS gate returns nothing
+            # No node has been removed so FSS gate returns nothing
             fss_rs_rows_0 = np.zeros(num_row_0)
             fss_rs_rows_1 = np.zeros(num_row_1)
 
             return in_0, in_1, fss_rs_rows_0, fss_rs_rows_1
+
         else:
             while not stop:
                 # Find the argmax of scores for row and column
                 row_max_msr = self._amx(row_msr_0, row_msr_1)
                 col_max_msr = self._amx(col_msr_0, col_msr_1)
+
+                # Check score of row/ column with maximum values to remove that particular node
+                eval_node_0 = row_msr_0[row_max_msr] - col_msr_0[col_max_msr]
+                eval_node_1 = row_msr_1[row_max_msr] - col_msr_1[col_max_msr]
+                sdel0, sdel1 = self.fss_evaluation_sdel(eval_node_0, eval_node_1, 1)
+
+                # Check whether row_msr[row_max_msr] >= col_msr[col_max_msr] or not
+                cond = self._equality_check_2(sdel0, sdel1, 0, 0, 1)
+
+                # Remove the row/ column based on the result of evaluation 0 => remove row, 1 => remove column
+                r2del, c2del = [], []
+                if cond == 0:
+
+                    # Because some rows might be zero now, let's ignore them in single node deletion
+                    for idxr in range(num_row_0):
+                        srdel = self._equality_check_2(in_0[idxr], in_1[idxr], 0, 0, num_col_0)
+                        if srdel.all() == 1:
+                            pass
+                        else:
+                            r2del.append(idxr)
+                    r2del_ind = r2del[row_max_msr]
+                    in_0[r2del_ind] = 0;                                in_1[r2del_ind] = 0
+
+                else:
+                    # Transpose secret shared input matrices before removing column
+                    transposed_in_0 = in_0.T
+                    transposed_in_1 = in_1.T
+
+                    # Because some columns might be zero now, let's ignore them in single node deletion
+                    for idxc in range(num_col_0):
+                        scdel =  self._equality_check_2(transposed_in_0[idxc], transposed_in_1[idxc],
+                                                        0, 0, num_row_0)
+                        if scdel.all() == 1:
+                            pass
+                        else:
+                            c2del.append(idxc)
+                    c2del_ind = c2del[col_max_msr]
+                    transposed_in_0[c2del_ind] = 0;                       transposed_in_1[c2del_ind] = 0
+
+                    # Return the transposed matrices to normal
+                    in_0 = transposed_in_0.T
+                    in_1 = transposed_in_1.T
+
+                # Recalculate the scores
+                msr_0, msr_1, row_msr_0, row_msr_1, col_msr_0, col_msr_1 = (self._calculate_scores_multidel
+                                                                            (in_0, in_1,
+                                                                             fss_rs_rows_0, fss_rs_rows_1,
+                                                                             num_col_0, num_col_1))
+
+                # Recheck the stop function
+                stop_itr_0 = msr_thr - msr_0
+                stop_itr_1 = msr_thr - msr_1
+                stop = self.fss_evaluation(stop_itr_0, stop_itr_1, 1)
+
+        return in_0, in_1
 
 
     def _multiple_node_deletion(self, P_in_0, P_in_1, rows_0, cols_0, rows_1, cols_1, msr_thr, t_shareMSR, t_shareEval):
@@ -330,7 +384,7 @@ class ChengChurchAlgorithm(BaseBiclusteringAlgorithm):
                     pass
             node_max_0, node_max_1 = self.fss_evaluation_without_len(np.array(argmx_con_0), np.array(argmx_con_1))
             s_j_0 = np.sum(node_max_0);                                 s_j_1 = np.sum(node_max_1)
-            delta_j.append(self._equality_check_2(s_j_0, s_j_1, m-1, 0))
+            delta_j.append(self._equality_check_2(s_j_0, s_j_1, m-1, 0, 1))
             argmx_con_0, argmx_con_1 = [], []
             if delta_j[j] == 1:
                 arg_max_res = j
@@ -490,12 +544,8 @@ class ChengChurchAlgorithm(BaseBiclusteringAlgorithm):
 
         return stop
 
-    def _equality_check_2(self, in_0, in_1, cp_in_0, cp_in_1):
+    def _equality_check_2(self, in_0, in_1, cp_in_0, cp_in_1, n_element):
         """Determine equality of matrix before and after node deletion; usage in stop function of multiple deletion"""
-        # Determine the number of secret shared elements for keys
-        # n_element = len(in_0)
-        n_element = 1
-
         # An instance of DPF gate for equality check with 6 threads
         eq = sycret.EqFactory(n_threads=6)
 
@@ -877,6 +927,48 @@ class ChengChurchAlgorithm(BaseBiclusteringAlgorithm):
 
         # Send the shares to the parties
         K = len(z_0)
+        P0.z_j = z_0
+        P1.z_j = z_1
+
+        # Mask the public input to FSS gate
+        P0.z_hat_j = P0.z_j + P0.r_in_j
+        P1.z_hat_j = P1.z_j + P1.r_in_j
+
+        P1.z_hat_nj = P0.z_hat_j
+        P0.z_hat_nj = P1.z_hat_j
+
+        # Evaluation with FSS IC gate
+        P1.o_j = funshade.eval_sign(K, P1.j, P1.k_j, P1.z_hat_j, P1.z_hat_nj)
+        P0.o_j = funshade.eval_sign(K, P0.j, P0.k_j, P0.z_hat_j, P0.z_hat_nj)
+
+
+        return P0.o_j, P1.o_j
+
+    def fss_evaluation_sdel(self, share_0, share_1, len):
+        """FSS IC Sign Evaluation when having known length of input vector particularly for single node deletion"""
+        # Input parameters threshold, and length of matrix
+        gamma = 0
+        z_0 = share_0.astype(funshade.DTYPE)
+        z_1 = share_1.astype(funshade.DTYPE)
+        K = len
+
+        # Create parties
+        class party:
+            def __init__(self, j: int):
+                self.j = j
+
+        P0 = party(0)
+        P1 = party(1)
+
+        # Generate setup preprocessing materials
+        r_in0, r_in1, k0, k1 = funshade.FssGenSign(K, gamma)
+
+        P0.r_in_j = r_in0
+        P1.r_in_j = r_in1
+        P0.k_j = k0
+        P1.k_j = k1
+
+        # Send the shares to the parties
         P0.z_j = z_0
         P1.z_j = z_1
 
