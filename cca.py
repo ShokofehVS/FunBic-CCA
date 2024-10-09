@@ -90,12 +90,6 @@ class ChengChurchAlgorithm(BaseBiclusteringAlgorithm):
             num_row_0, num_col_0 = in_0.shape
             num_row_1, num_col_1 = in_1.shape
 
-            # Input matrices before score finding and removal/ addition of nodes
-            rows_0 = np.ones(num_row_0, dtype=bool)
-            cols_0 = np.ones(num_col_0, dtype=bool)
-            rows_1 = np.ones(num_row_1, dtype=bool)
-            cols_1 = np.ones(num_col_1, dtype=bool)
-
             # Performance analysis
             with open('result_size.txt', 'w') as saveFile:
                 saveFile.write(str(P_0.aij_0) + "\n")
@@ -104,34 +98,29 @@ class ChengChurchAlgorithm(BaseBiclusteringAlgorithm):
 
             # Steps including single, multiple deletion/ addition
             P_0.bij_0, P_1.bij_1, len_row  = (
-                self._multiple_node_deletion(P_0.aij_0, P_1.aij_1, rows_0, cols_0,  rows_1, cols_1, self.msr_threshold))
+                self._multiple_node_deletion(P_0.aij_0, P_1.aij_1, self.msr_threshold))
 
             P_0.cij_0, P_1.cij_1, len_row, len_col  = (
                 self._single_node_deletion(P_0.bij_0, P_1.bij_1, len_row, self.msr_threshold))
 
-            P_0.dij_0, P_1.dij_1  = (
-                self._node_addition(P_0.cij_0, P_1.cij_1, in_0, in_1, len_row, len_col))
+            P_0.dij_0, P_1.dij_1, len_row, len_col = (
+                self._node_addition(P_0.bij_0, P_1.bij_1, in_0, in_1, len_row, num_col_0))
 
             # Output shares to reconstruct the final matrix
-            new_data = P_0.cij_0 + P_1.cij_1
+            new_data = P_0.dij_0 + P_1.dij_1
 
-            # Number of rows and columns
-            new_cols             = new_data.shape[1]
+            # Rows and columns indexes without zeros
             rows_without_zeros   = ~np.any(new_data == 0, axis=1)
             cols_without_zeros   = ~np.any(new_data == 0, axis=0)
-            sub_new_data         = new_data[rows_without_zeros]
-            new_rows             = sub_new_data.shape[0]
+            rows_indexes         = np.where(rows_without_zeros)[0]
+            cols_indexes         = np.where(cols_without_zeros)[0]
 
-            # Rows and columns indexes
-            rows_indexes  = np.where(rows_without_zeros)[0]
-            cols_indexes  = np.where(cols_without_zeros)[0]
-
-            if new_rows == 0 or new_cols == 0:
+            if len_row == 0 or len_col == 0:
                 break
 
             # masking matrix values
             if i < self.num_biclusters - 1:
-                bicluster_shape = (new_rows, new_cols)
+                bicluster_shape = (len_row, len_col)
                 data            = np.random.uniform(low=min_value, high=max_value, size=bicluster_shape)
 
             biclusters.append(Bicluster(rows_indexes, cols_indexes))
@@ -191,7 +180,7 @@ class ChengChurchAlgorithm(BaseBiclusteringAlgorithm):
                             r2del.append(idxr)
                     r2del_ind = r2del[row_max_msr]
                     in_0[r2del_ind] = 0;                                in_1[r2del_ind] = 0
-                    len_row        -= 1;                                   len_row     -= 1
+                    len_row        -= 1
 
                 else:
                     # Transpose secret shared input matrices before removing column
@@ -226,12 +215,15 @@ class ChengChurchAlgorithm(BaseBiclusteringAlgorithm):
         return in_0, in_1, len_row, num_col_0
 
 
-    def _multiple_node_deletion(self, in_0, in_1, rows_0, cols_0, rows_1, cols_1, msr_thr):
+    def _multiple_node_deletion(self, in_0, in_1, msr_thr):
         """Performs the multiple row/column deletion step (this is a direct implementation of the Algorithm 2 described
            in the original paper)"""
         # Secret shared inputs' shapes
         num_row_0, num_col_0 = in_0.shape
         num_row_1, num_col_1 = in_1.shape
+
+        # Initialization -- row size
+        total_len_row = num_row_0
 
         # MSRs computation when NO nodes are removed (having exact rows/ columns length)
         msr_0, msr_1, row_msr_0, row_msr_1, col_msr_0, col_msr_1  = self._scores_before_steps(in_0, in_1)
@@ -259,7 +251,7 @@ class ChengChurchAlgorithm(BaseBiclusteringAlgorithm):
                 nr2del = self._equality_check_2(fss_rs_rows_0, fss_rs_rows_1, 0, 0, num_row_0)
 
                 # Because some rows might be zero now, let's ignore them in multiple node deletion
-                # First iteration; finds those zeros rows
+                # First iteration; finds those non-zeros rows
                 # Second iteration; try to mask those rows that are not removed with zeros
                 r2del = []
                 for idxr in range(num_row_0):
@@ -269,11 +261,11 @@ class ChengChurchAlgorithm(BaseBiclusteringAlgorithm):
                     else:
                         r2del.append(idxr)
 
-                total_len_row = len(r2del)
-                for idxr in range(len(r2del)):
+                itr_size = np.copy(total_len_row)
+                for idxr in range(itr_size):
                     i = nr2del[idxr]
                     if i == 1:
-                        r2del_ind = r2del[idxr]
+                        r2del_ind       = r2del[idxr]
                         in_0[r2del_ind] = 0;               in_1[r2del_ind] = 0
                         total_len_row  -= 1
                     else:
@@ -281,9 +273,8 @@ class ChengChurchAlgorithm(BaseBiclusteringAlgorithm):
 
 
                 # Check whether columns are above 100 then apply node deletion on them
-                if len(cols_0) >= self.data_min_cols:
-                    in_0, in_1 = self._cols2Remove(in_0, in_1, rows_0, rows_1, cols_0, cols_1,
-                                                   num_row_0, num_col_0, num_row_1, num_col_1)
+                if num_col_0 >= self.data_min_cols:
+                    pass
 
                 # Recalculate the scores (the columns by default have not been removed) to be used in stop function below
                 msr_0, msr_1, row_msr_0, row_msr_1, col_msr_0, col_msr_1 =  (self._calculate_scores_del
@@ -311,8 +302,8 @@ class ChengChurchAlgorithm(BaseBiclusteringAlgorithm):
         """Performs the row/column addition step (this is a direct implementation of the Algorithm 3 described in
            the original paper)"""
         # Secret shared inputs' shapes
-        num_row_0, num_col_0 = in_0.shape
-        num_row_1, num_col_1 = in_1.shape
+        num_row_0, num_col_0 = bij_0.shape
+        num_row_1, num_col_1 = bij_1.shape
 
         # Calculate score for whole matrix and that of columns
         msr_0, msr_1, _, _, col_msr_0, col_msr_1 = (self._calculate_scores_del(bij_0, bij_1, total_len_row, len_col))
@@ -324,33 +315,33 @@ class ChengChurchAlgorithm(BaseBiclusteringAlgorithm):
 
         # Then follow similar steps in deletion; except return those have been removed
         # Add the columns based on the result of evaluation 1 => nothing, 0 => add columns
-        nc2add = self._equality_check_2(fss_rs_col_add_0, fss_rs_col_add_1, 0, 0, total_len_row)
+        nc2add = self._equality_check_2(fss_rs_col_add_0, fss_rs_col_add_1, 0, 0, num_col_0)
 
-        # Transpose secret shared input matrices before adding column
-        transposed_in_0 = bij_0.T
-        transposed_in_1 = bij_1.T
+        # Transpose secret shared input matrices before adding column (original, and result of previous step)
+        transposed_bin_0 = bij_0.T
+        transposed_bin_1 = bij_1.T
+
+        transposed_in_0  = in_0.T
+        transposed_in_1  = in_1.T
 
         # Because some columns might be zero now, let's ignore them in addition
-        # First iteration; finds those zeros columns
-        # Second iteration; try to add them with original matrix values
-        c2add = []
-        for idxc in range(len_col):
-            scdel = self._equality_check_2(transposed_in_0[idxc], transposed_in_1[idxc],0, 0, total_len_row)
-            if scdel.all() == 1:
-                pass
+        # Finds those zeros columns and try to add them with original matrix values
+        for idxc in range(num_col_0):
+            scadd = self._equality_check_2(transposed_bin_0[idxc], transposed_bin_1[idxc], 0, 0, num_row_0)
+            i = nc2add[idxc]
+            if i == 0 and scadd.all() == 1:
+                transposed_bin_0[idxc] = transposed_in_0[idxc]
+                transposed_bin_1[idxc] = transposed_in_1[idxc]
+                len_col += 1
             else:
-                c2del.append(idxc)
-        c2del_ind = c2del[col_max_msr]
-        transposed_in_0[c2del_ind] = 0;
-        transposed_in_1[c2del_ind] = 0
+                pass
 
         # Return the transposed matrices to normal
-        in_0 = transposed_in_0.T
-        in_1 = transposed_in_1.T
-        num_col_0 -= 1;
-        num_col_1 -= 1
+        in_0  = transposed_in_0.T
+        in_1  = transposed_in_1.T
 
-
+        bij_0 = transposed_bin_0.T
+        bij_1 = transposed_bin_1.T
 
         # Calculate score for whole matrix and that of rows
         msr_0, msr_1, row_msr_0, row_msr_1, _, _ =  (self._calculate_scores_del(bij_0, bij_1, total_len_row, len_col))
@@ -360,33 +351,24 @@ class ChengChurchAlgorithm(BaseBiclusteringAlgorithm):
         r2add_con_1 = msr_1 - row_msr_1
         fss_rs_rows_add_0, fss_rs_rows_add_1 = self.fss_evaluation_without_len(r2add_con_0, r2add_con_1)
 
-        # Then follow similar steps in deletion; except return those have been removed
+        # Then follow similar steps in deletion
         # Add the rows based on the result of evaluation 1 => nothing, 0 => add rows
         nr2add = self._equality_check_2(fss_rs_rows_add_0, fss_rs_rows_add_1, 0, 0, num_row_0)
 
         # Because some rows might be zero now, let's ignore them in addition
-        # First iteration; finds those zeros rows
-        # Second iteration; try to add them with original matrix values
-        r2add = []
-        for idxr in range(total_len_row):
+        # Finds those zeros rows and try to add them with original matrix values
+        for idxr in range(num_row_0):
             sradd = self._equality_check_2(bij_0[idxr], bij_1[idxr], 0, 0, num_col_0)
-            if r2add.all() == 1:
-                r2add.append(idxr)
-            else:
-                pass
-
-        for idxr in range(len(r2add)):
             i = nr2add[idxr]
-            if i == 1:
-                r2add_ind = nr2add[idxr]
-                bij_0[r2add_ind] = in_0[r2add_ind]
-                bij_1[r2add_ind] = in_1[r2add_ind]
+            if i == 0 and sradd.all() == 1:
+                bij_0[idxr] = in_0[idxr]
+                bij_1[idxr] = in_1[idxr]
                 total_len_row += 1
             else:
                 pass
 
 
-        return bij_0, bij_1
+        return bij_0, bij_1, total_len_row, len_col
 
     def _amx(self, in_0, in_1):
         """Calculate Argmax of scores of the rows, of the columns."""
@@ -575,112 +557,6 @@ class ChengChurchAlgorithm(BaseBiclusteringAlgorithm):
 
 
         return r_eq
-
-
-    def _cols2Remove(self, in_0, in_1, rows_0, rows_1, cols_0, cols_1, num_row_0, num_col_0, num_row_1, num_col_1):
-        """Calculate multiple node deletion for columns if their length is above 100"""
-        # Recalculate the score
-        # Calculate First residue locally
-        residue_0 = self._calculate_residue(in_0, rows_0, cols_0, 1, 0, 0)
-        residue_1 = self._calculate_residue(in_1, rows_1, cols_1, 1, 0, 0)
-
-        # Utilise secured vector multiplication with one round of communication for r_ij_0 * r_ij_1
-        residue_0_flatted = residue_0.flatten()
-        residue_1_flatted = residue_1.flatten()
-
-        squared_residue_0_flatted, squared_residue_1_flatted = self.secMult_vector(residue_0_flatted,
-                                                                                   residue_1_flatted,
-                                                                                   residue_0_flatted,
-                                                                                   residue_1_flatted)
-
-        # Continue doing squaring by local power of 2 residue and joint multiplication
-        squared_residue_0 = residue_0 ** 2 + (2 * squared_residue_0_flatted.reshape(num_row_0, num_col_0))
-        squared_residue_1 = residue_1 ** 2 + (2 * squared_residue_1_flatted.reshape(num_row_1, num_col_1))
-
-        # Local MSRs computation
-        msr_0, row_msr_0, col_msr_0 = self._calculate_msr(squared_residue_0, 1, 0, 0)
-        msr_1, row_msr_1, col_msr_1 = self._calculate_msr(squared_residue_1, 1, 0, 0)
-
-        # FSS gate to check which cols should be removed
-        c2remove_con_0 = self.multiple_node_deletion_threshold * msr_0 - col_msr_0
-        c2remove_con_1 = self.multiple_node_deletion_threshold * msr_1 - col_msr_1
-        fss_rs_cols_0, fss_rs_cols_1 = self.fss_evaluation_without_len(c2remove_con_0, c2remove_con_1)
-
-        # Create a matrix for FSS results before multiplication of them with input matrix
-        fss_rs_cols_0 = np.tile(fss_rs_cols_0, (num_row_0, 1)).T
-        fss_rs_cols_1 = np.tile(fss_rs_cols_1, (num_row_1, 1)).T
-
-        # Now mask cols with zeros to be removed for those in FSS gate result
-        # First transpose secret shared matrices before multiplying with fss
-        transposed_in_0 = in_0.T
-        transposed_in_1 = in_1.T
-        # Secondly multiplying transposed matrices with fss results
-        for idxc in range(num_col_0):
-            transposed_in_0[idxc], transposed_in_1[idxc] = self.secMult_vector(
-                transposed_in_0[idxc], transposed_in_1[idxc],
-                fss_rs_cols_0[idxc], fss_rs_cols_1[idxc])
-        # Thirdly return the transposed matrices to normal
-        in_0 = transposed_in_0.T
-        in_1 = transposed_in_1.T
-
-        return in_0, in_1
-
-
-    def _calculate_residue(self, data, rows, cols, multidel, coladd, rowadd):
-        """MUST BE REPLACED WITH NEW IMPLEMENTATION --- ONLY USE CASE IN ALGORITHM STEP FOR COLUMNS"""
-        sub_data = data
-        # Check which action is being performed; then compute local addition/ subtraction plus division
-        # Note that all mean are converted to integers to avoid overflow
-        if multidel:
-            data_mean = np.mean(sub_data).astype(int)
-            row_means = np.mean(sub_data, axis=1).astype(int)
-            col_means = np.mean(sub_data, axis=0).astype(int)
-
-            residues = (sub_data - row_means[:, np.newaxis] - col_means + data_mean)
-
-            return residues
-
-        elif coladd:
-            sub_data = data[rows][:, cols]
-            sub_data_rows = data[rows]
-            data_mean = np.mean(sub_data).astype(int)
-            row_means = np.mean(sub_data, axis=1).astype(int)
-            col_means = np.mean(sub_data_rows, axis=0).astype(int)
-            col_residues = sub_data_rows - row_means[:, np.newaxis] - col_means + data_mean
-
-            return col_residues
-
-        else:
-            sub_data = data[rows][:, cols]
-            sub_data_cols = data[:, cols]
-            data_mean = np.mean(sub_data).astype(int)
-            row_means = np.mean(sub_data_cols, axis=1).astype(int)
-            col_means = np.mean(sub_data, axis=0).astype(int)
-            row_residues = sub_data_cols - row_means[:, np.newaxis] - col_means + data_mean
-
-            return row_residues
-
-
-    def _calculate_msr(self, sq_residues, multidel, coladd, rowadd):
-        """MUST BE REPLACED WITH NEW IMPLEMENTATION  --- ONLY USE CASE IN ALGORITHM STEP FOR COLUMNS"""
-        # Check which action is being performed; then send msr, or that of rows and columns back
-        if multidel:
-            squared_residues = sq_residues
-            msr = np.mean(squared_residues).astype(int)
-            row_msr = np.mean(squared_residues, axis=1).astype(int)
-            col_msr = np.mean(squared_residues, axis=0).astype(int)
-
-            return msr, row_msr, col_msr
-
-        elif coladd:
-            col_squared_residues = sq_residues
-            col_msr = np.mean(col_squared_residues, axis=0).astype(int)
-            return col_msr
-
-        else:
-            row_squared_residues = sq_residues
-            row_msr = np.mean(row_squared_residues, axis=1).astype(int)
-            return row_msr
 
 
     def secSquare_vector(self, share_00, share_01):
