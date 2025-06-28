@@ -20,7 +20,7 @@ To measure the similarity of encrypted biclusters with non-encrypted version, we
 ### Code Author and Contributor
 Shokofeh VahidianSadegh, and Alberto Ibarrondo
 
-_The code accompanying a paper accepted at SECRYPT 2025._
+_The code accompanying a [paper](https://www.scitepress.org/publishedPapers/2025/134554/pdf/index.html) published at SECRYPT 2025._
 
 
 
